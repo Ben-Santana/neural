@@ -1,0 +1,65 @@
+import assert from 'node:assert/strict';
+import {chromium} from 'playwright-core';
+const browser=await chromium.launch({channel:'chrome',headless:true});
+try{
+ const page=await browser.newPage({viewport:{width:1100,height:850}});
+ await page.goto('http://127.0.0.1:5190');
+ await page.evaluate(()=>localStorage.clear());await page.reload();
+ for(const name of ['Tap index','Tap middle','Double tap index','Double tap middle']){
+  await page.getByRole('button',{name:`Edit ${name} shortcut`,exact:true}).click();
+  await page.getByRole('button',{name:'Neural actions',exact:true}).click();
+  assert.equal(await page.getByRole('menuitem',{name:'Desktop profile picker',exact:true}).isDisabled(),true);
+  await page.locator('h1').click();
+ }
+ await page.getByRole('button',{name:'Add profile',exact:true}).click();
+ await page.getByRole('button',{name:'Use work icon',exact:true}).click();
+ await page.getByRole('button',{name:'Edit Swipe left shortcut',exact:true}).click();
+ await page.getByRole('button',{name:'Neural actions',exact:true}).click();
+ await page.getByRole('menuitem',{name:'Desktop profile picker',exact:true}).click();
+ await page.screenshot({path:'/tmp/picker-setup.png'});
+ await page.getByRole('menuitem',{name:'Use in all profiles',exact:true}).click();
+ let saved=await page.evaluate(()=>JSON.parse(localStorage.getItem('neural.profiles.v1')));
+ assert.ok(saved.profiles.every(p=>p.assignments.find(a=>a.id==='swipe-left').appAction.type==='open-profile-picker'));
+ await page.getByRole('button',{name:'Add profile',exact:true}).click();await page.getByRole('button',{name:'Use music icon',exact:true}).click();
+ await page.reload();
+ saved=await page.evaluate(()=>JSON.parse(localStorage.getItem('neural.profiles.v1')));
+ assert.equal(saved.profiles.length,3);
+ assert.ok(saved.profiles.every(p=>p.assignments.find(a=>a.id==='swipe-left').appAction.type==='open-profile-picker'));
+ await page.getByRole('button',{name:'Remove Swipe left shortcut',exact:true}).click();
+ saved=await page.evaluate(()=>JSON.parse(localStorage.getItem('neural.profiles.v1')));
+ assert.ok(saved.profiles.every(p=>!p.assignments.find(a=>a.id==='swipe-left').appAction));
+ await page.addInitScript(()=>{window.band={send:()=>{},onMessage:cb=>{window.pickerReceive=cb;return ()=>{};}};});
+ await page.goto('http://127.0.0.1:5190/?profile-picker');
+ await page.evaluate(()=>window.pickerReceive({kind:'picker_state',state:{profiles:[{id:'a',name:'Home',icon:'home'},{id:'b',name:'Work',icon:'work'},{id:'c',name:'Music',icon:'music'}],selected:1,angle:2*Math.PI/3}}));
+ assert.equal(await page.getByRole('button',{name:'Select Work'}).getAttribute('aria-pressed'),'true');
+ await page.evaluate(()=>window.pickerReceive({kind:'picker_open'}));
+ await page.locator('.desktop-picker.entering').waitFor();
+ assert.equal(await page.locator('.picker-selection').innerText(),'Work');
+ assert.equal(await page.locator('.picker-name,.picker-heading').count(),0);
+ assert.equal(await page.locator('.picker-cancel,.picker-title').count(),0);
+ await page.evaluate(()=>Promise.all(document.getAnimations().map(a=>a.finished)));
+ await page.screenshot({path:'/tmp/profile-picker.png',omitBackground:true});
+ // Sparse packets must produce intermediate frames, then settle without oscillation.
+ const before=await page.locator('.picker-cursor-arm').evaluate(e=>getComputedStyle(e).transform);
+ await page.evaluate(()=>window.pickerReceive({kind:'picker_state',state:{profiles:[{id:'a',name:'Home',icon:'home'},{id:'b',name:'Work',icon:'work'},{id:'c',name:'Music',icon:'music'}],selected:2,angle:4*Math.PI/3}}));
+ await page.waitForTimeout(60);
+ const during=await page.locator('.picker-cursor-arm').evaluate(e=>getComputedStyle(e).transform);
+ assert.notEqual(during,before);
+ await page.waitForTimeout(650);
+ const settled=await page.locator('.picker-cursor-arm').evaluate(e=>Number(e.style.transform.match(/rotate\((.*)rad/)[1]));
+ assert.ok(Math.abs(settled-4*Math.PI/3)<0.001);
+ await page.evaluate(()=>window.pickerReceive({kind:'picker_state',state:{profiles:[{id:'a',name:'Home',icon:'home'},{id:'b',name:'Work',icon:'work'},{id:'c',name:'Music',icon:'music'}],selected:0,angle:2*Math.PI}}));
+ await page.waitForTimeout(650);
+ assert.ok(Math.abs(await page.locator('.picker-cursor-arm').evaluate(e=>Number(e.style.transform.match(/rotate\((.*)rad/)[1]))-2*Math.PI)<0.001);
+ assert.deepEqual(await page.locator('.picker-help>span>span:last-child').allTextContents(),['Choose','Select']);
+ await page.evaluate(()=>window.pickerReceive({kind:'picker_close'}));
+ await page.locator('.desktop-picker.leaving').waitFor();
+ await page.evaluate(()=>Promise.all(document.getAnimations().map(a=>a.finished)));
+ assert.equal(await page.locator('.picker-panel').evaluate(e=>getComputedStyle(e).opacity),'0');
+ await page.evaluate(()=>window.pickerReceive({kind:'picker_open'}));
+ await page.evaluate(()=>Promise.all(document.getAnimations().map(a=>a.finished)));
+ assert.equal(await page.locator('.picker-panel').evaluate(e=>getComputedStyle(e).opacity),'1');
+ await page.emulateMedia({reducedMotion:'reduce'});
+ assert.equal(await page.locator('.picker-panel').evaluate(e=>getComputedStyle(e).animationName),'none');
+ console.log('Profile picker setup, propagation, persistence, removal and rendering passed.');
+}finally{await browser.close();}

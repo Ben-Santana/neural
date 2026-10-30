@@ -1,0 +1,35 @@
+import assert from 'node:assert/strict';
+import {chromium} from 'playwright-core';
+const browser=await chromium.launch({channel:'chrome',headless:true});
+try{
+ const page=await browser.newPage({viewport:{width:1440,height:1000}});
+ await page.goto('http://127.0.0.1:5190');
+ await page.evaluate(()=>localStorage.clear());await page.reload();
+ await page.getByRole('button',{name:'Edit Swipe left shortcut',exact:true}).click();
+ const api=await page.getByRole('button',{name:'Configure API call'}).boundingBox();
+ const neural=await page.getByRole('button',{name:'Neural actions',exact:true}).boundingBox();
+ assert(api.x<neural.x);
+ await page.getByRole('button',{name:'Configure API call'}).click();
+ await page.getByLabel('URL',{exact:true}).fill('https://example.com/hook?q=1');
+ await page.getByLabel('Headers (JSON)',{exact:true}).fill('{"Authorization":"Bearer test","Content-Type":"application/json"}');
+ await page.getByLabel('Request body',{exact:true}).fill('{"on":true}');
+ await page.screenshot({path:'/tmp/neural-api-popup.png'});
+ await page.getByRole('button',{name:'Save API call',exact:true}).click();
+ assert.equal(await page.getByRole('dialog').count(),0);
+ await page.reload();
+ assert.equal(await page.locator('.app-action-cap').first().innerText(),'POST example.com');
+ await page.getByRole('button',{name:'Edit Swipe left shortcut',exact:true}).click();
+ await page.getByRole('button',{name:'Configure API call'}).click();
+ assert.equal(await page.getByLabel('Request body',{exact:true}).inputValue(),'{"on":true}');
+ await page.keyboard.press('Escape');
+ assert.equal(await page.getByRole('dialog').count(),0);
+ await page.keyboard.press('Escape');
+ await page.getByRole('button',{name:'Add gesture combo',exact:true}).click();
+ await page.getByRole('button',{name:/Edit Combo 1 shortcut/}).click();
+ await page.getByRole('button',{name:'Configure API call'}).click();
+ await page.getByLabel('URL',{exact:true}).fill('http://localhost:8080/action');
+ await page.getByLabel('Method',{exact:true}).selectOption('GET');
+ await page.getByRole('button',{name:'Save API call',exact:true}).click();
+ assert.equal(await page.locator('.app-action-cap').last().innerText(),'GET localhost:8080');
+ console.log('API popup, placement, persistence, editing, Escape, and combo checks passed.');
+}finally{await browser.close();}
