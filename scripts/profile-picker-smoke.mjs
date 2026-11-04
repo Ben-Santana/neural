@@ -25,9 +25,12 @@ try{
  saved=await page.evaluate(()=>JSON.parse(localStorage.getItem('neural.profiles.v1')));
  assert.equal(saved.profiles.length,3);
  assert.ok(saved.profiles.every(p=>p.assignments.find(a=>a.id==='swipe-left').appAction.type==='open-profile-picker'));
+ page.once('dialog',d=>d.accept());
  await page.getByRole('button',{name:'Remove Swipe left shortcut',exact:true}).click();
  saved=await page.evaluate(()=>JSON.parse(localStorage.getItem('neural.profiles.v1')));
- assert.ok(saved.profiles.every(p=>!p.assignments.find(a=>a.id==='swipe-left').appAction));
+ assert.ok(!saved.profiles.find(p=>p.id===saved.activeId).assignments.find(a=>a.id==='swipe-left').appAction);
+ assert.ok(saved.profiles.filter(p=>p.id!==saved.activeId).every(p=>p.assignments.find(a=>a.id==='swipe-left').appAction.type==='open-profile-picker'));
+ assert.deepEqual(saved.sharedIds,[]);
  await page.addInitScript(()=>{window.band={send:()=>{},onMessage:cb=>{window.pickerReceive=cb;return ()=>{};}};});
  await page.goto('http://127.0.0.1:5190/?profile-picker');
  await page.evaluate(()=>window.pickerReceive({kind:'picker_state',state:{profiles:[{id:'a',name:'Home',icon:'home'},{id:'b',name:'Work',icon:'work'},{id:'c',name:'Music',icon:'music'}],selected:1,angle:2*Math.PI/3}}));

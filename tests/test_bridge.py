@@ -3,7 +3,7 @@ import importlib.util
 import json
 import pathlib
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import ANY, AsyncMock, patch
 
 spec = importlib.util.spec_from_file_location('bridge', pathlib.Path(__file__).parents[1]/'python/bridge.py')
 bridge = importlib.util.module_from_spec(spec)
@@ -30,6 +30,14 @@ class SerializationTests(unittest.TestCase):
 
 
 class CommandTests(unittest.IsolatedAsyncioTestCase):
+    async def test_air_preview_requires_explicit_opt_in(self):
+        worker=bridge.Bridge()
+        self.assertFalse(worker.shortcuts.air_preview_enabled)
+        await worker.command({'action':'air_preview','enabled':True})
+        self.assertTrue(worker.shortcuts.air_preview_enabled)
+        await worker.command({'action':'air_preview','enabled':False})
+        self.assertFalse(worker.shortcuts.air_preview_enabled)
+
     async def test_disconnect_awaits_subscription_cleanup(self):
         worker=bridge.Bridge()
         closed=asyncio.Event()
@@ -45,6 +53,71 @@ class CommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(worker.session)
 
 
+    async def test_failed_old_session_does_not_block_reconnect(self):
+        worker=bridge.Bridge()
+        async def failed_session():
+            raise RuntimeError('Band L2CAP stream closed')
+        worker.session=asyncio.create_task(failed_session())
+        await asyncio.sleep(0)
+        with patch.object(bridge,'emit'):
+            await worker.disconnect()
+        self.assertIsNone(worker.session)
+        # A subsequent cleanup/connect attempt no longer awaits the failed task.
+        await worker.disconnect()
+
+
+class ActivationTests(unittest.IsolatedAsyncioTestCase):
+    async def run_stream(self, failure=None, quiet=False):
+        calls = []
+        class Subscription:
+            async def __aenter__(self):
+                calls.append('subscribe')
+                return self
+            async def __aexit__(self, *_): pass
+            def __aiter__(self): return self
+            async def __anext__(self): raise StopAsyncIteration
+        class FakeBand:
+            device_info = None
+            band_verified = True
+            def __init__(self, *_): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *_): calls.append('closed')
+            async def read_hand(self): return None
+            async def read_battery(self): return None
+            async def _rpc(self, *args):
+                calls.append(args)
+                if failure:
+                    raise failure
+                return b''
+            def subscribe(self, streams): return Subscription()
+        worker = bridge.Bridge()
+        with patch('meta_neural_py.Band', FakeBand), patch.object(bridge, 'emit') as emit:
+            await worker.stream('band', quiet=quiet)
+        self.assertIsNone(worker.band)
+        return calls, emit
+
+    async def test_activation_completes_before_subscription(self):
+        calls, emit = await self.run_stream()
+        self.assertEqual(calls, [('request_active', 6, 5, b'\x30\x02'), 'subscribe', 'closed'])
+        emit.assert_any_call('state', state='connected')
+
+    async def test_activation_timeout_is_visible_and_closes_connection(self):
+        from meta_neural_py.errors import RequestTimeout
+        calls, emit = await self.run_stream(RequestTimeout('activation expired', stage='ready'))
+        self.assertEqual(calls[-1], 'closed')
+        self.assertNotIn('subscribe', calls)
+        self.assertFalse(any(c.args == ('identity_recovery',) for c in emit.call_args_list))
+        self.assertTrue(any(c.args == ('error',) and 'activation expired' in c.kwargs['message'] for c in emit.call_args_list))
+        emit.assert_any_call('state', state='disconnected')
+
+    async def test_quiet_connection_failure_stays_quiet_for_another_try(self):
+        from meta_neural_py.errors import RequestTimeout
+        _, emit = await self.run_stream(RequestTimeout('band not ready', stage='connecting'), quiet=True)
+        self.assertFalse(any(c.args == ('error',) for c in emit.call_args_list))
+        emit.assert_any_call('state', state='connecting')
+        emit.assert_any_call('state', state='disconnected')
+
+
 class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_discovery_preserves_request_id(self):
         worker = bridge.Bridge()
@@ -53,6 +126,28 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
             await worker.command({'action':'discover','request_id':'startup'})
         discover.assert_awaited_once_with(timeout=5)
         emit.assert_called_once_with('devices',devices=devices,request_id='startup')
+
+    async def test_watch_scan_uses_a_short_timeout_and_hides_bluetooth_misses(self):
+        worker = bridge.Bridge()
+        with patch('meta_neural_py.Band.discover', new_callable=AsyncMock, side_effect=RuntimeError('bluetooth off')) as discover, patch.object(bridge, 'emit') as emit:
+            await worker.command({'action':'discover','request_id':'watch:4','timeout':3,'quiet':True})
+        discover.assert_awaited_once_with(timeout=3)
+        emit.assert_called_once_with('devices', devices=[], request_id='watch:4')
+
+    async def test_discovery_does_not_scan_while_a_band_is_connected(self):
+        worker = bridge.Bridge()
+        worker.band = object()
+        with patch('meta_neural_py.Band.discover', new_callable=AsyncMock) as discover, patch.object(bridge, 'emit') as emit:
+            await worker.command({'action':'discover','request_id':'watch:2','timeout':3})
+        discover.assert_not_called()
+        emit.assert_called_once_with('devices', devices=[], request_id='watch:2')
+
+    def test_discovery_timeout_rejects_bad_values(self):
+        self.assertEqual(bridge.discovery_timeout(None), 5)
+        self.assertEqual(bridge.discovery_timeout('soon'), 5)
+        self.assertEqual(bridge.discovery_timeout(0), 5)
+        self.assertEqual(bridge.discovery_timeout(30), 8)
+        self.assertEqual(bridge.discovery_timeout(2.5), 2.5)
 
 
 class ShortcutFeedbackTests(unittest.TestCase):
@@ -123,5 +218,25 @@ class EnrollmentRecoveryTests(unittest.IsolatedAsyncioTestCase):
         worker = bridge.Bridge()
         with patch('meta_neural_py.Band.enroll', new_callable=AsyncMock) as enrollment, patch.object(worker, 'stream', new_callable=AsyncMock) as stream, patch.object(bridge, 'emit'):
             await worker.enroll('band', False)
-        enrollment.assert_awaited_once_with('band', allow_missing_band_key=False)
+        enrollment.assert_awaited_once_with('band', auth=ANY, allow_missing_band_key=False)
         stream.assert_awaited_once_with('band', recover_identity=False)
+
+
+class MetaLoginTests(unittest.IsolatedAsyncioTestCase):
+    async def test_login_callback_is_correlated_and_cancel_does_not_resolve_other_request(self):
+        worker = bridge.Bridge()
+        future = asyncio.get_running_loop().create_future()
+        worker.login_requests['current'] = future
+        await worker.command({'action': 'meta_login_result', 'request_id': 'stale', 'callback': 'wrong'})
+        self.assertFalse(future.done())
+        await worker.command({'action': 'meta_login_result', 'request_id': 'current', 'callback': 'expected'})
+        self.assertEqual(await future, 'expected')
+
+    async def test_cancelled_login_raises_fixed_error(self):
+        from meta_neural_py.errors import LoginCancelled
+        worker = bridge.Bridge()
+        future = asyncio.get_running_loop().create_future()
+        worker.login_requests['current'] = future
+        await worker.command({'action': 'meta_login_result', 'request_id': 'current'})
+        with self.assertRaises(LoginCancelled):
+            await future

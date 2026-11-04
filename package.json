@@ -14,7 +14,13 @@
     "test:motions": "node scripts/motions-smoke.mjs",
     "test:api": "node scripts/api-smoke.mjs",
     "test:startup": "node scripts/startup-smoke.mjs",
-    "package:mac": "node scripts/create-icons.mjs && npm run build && python3 scripts/package-macos.py"
+    "package:mac": "node scripts/create-icons.mjs && npm run build && python3 scripts/package-macos.py",
+    "test:models": "node scripts/model-tests-smoke.mjs",
+    "test:air": "node scripts/air-gesture-math.mjs && node scripts/air-gesture-smoke.mjs",
+    "test:air:cursor": "node scripts/air-cursor-native-smoke.mjs && node scripts/air-cursor-smoke.mjs",
+    "test:air:feature": "node scripts/air-feature-smoke.mjs",
+    "test:air:math": "node scripts/air-gesture-math.mjs",
+    "test:air:engine": "npm run build && node scripts/air-engine-smoke.mjs"
   },
   "dependencies": {
     "@fontsource/geist": "^5.2.8",

@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 contextBridge.exposeInMainWorld('band', {
+  metaCredentials: (request: unknown) => ipcRenderer.invoke('meta:credentials', request),
   getSettings: () => ipcRenderer.invoke('app:settings'),
   updateSettings: (settings: unknown) => ipcRenderer.invoke('app:settings', settings),
   send: (command: unknown) => ipcRenderer.send('band:command', command),

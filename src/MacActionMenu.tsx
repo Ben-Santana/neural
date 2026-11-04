@@ -25,6 +25,6 @@ export function MacActionMenu({initial,onSave,onCancel}:{initial?:AppAction;onSa
  <label htmlFor="mac-app-name">Open an app</label>
  <input id="mac-app-name" required maxLength={256} value={app} onChange={e=>setApp(e.target.value)} placeholder="App name, e.g. Safari" autoComplete="off"/>
  <button className="mac-app-save" type="submit" disabled={!validMacAction({type:'macos-action',action:'open-app',app:app.trim()})}>Save app</button>
- </form>:['Apps','Sound & display','Current app'].map(group=><div key={group} role="group" aria-label={group}><p className="mac-action-group">{group}</p>{macActions.filter(a=>a.group===group).map(a=><button key={a.id} role="menuitem" onClick={()=>a.id==='open-app'?setEnterApp(true):onSave({type:'macos-action',action:a.id})}><span>{a.label}</span>{a.id==='open-app'?<ChevronRight size={14}/>:saved?.action===a.id?<Check size={14}/>:null}</button>)}</div>)}
+ </form>:['Mouse','Apps','Sound & display','Current app'].map(group=><div key={group} role="group" aria-label={group}><p className="mac-action-group">{group}</p>{macActions.filter(a=>a.group===group).map(a=><button key={a.id} role="menuitem" onClick={()=>a.id==='open-app'?setEnterApp(true):onSave({type:'macos-action',action:a.id})}><span>{a.label}</span>{a.id==='open-app'?<ChevronRight size={14}/>:saved?.action===a.id?<Check size={14}/>:null}</button>)}</div>)}
  </div>;
 }

@@ -46,6 +46,23 @@ class ShortcutTests(unittest.TestCase):
         self.gesture('left')
         self.assertEqual(self.sent, [{'appAction':{'type':'open-profile-picker'}}])
 
+    def test_cheat_sheet_action_can_repeat_without_blocking_shortcuts(self):
+        self.engine.configure([
+            {'id':'swipe-left','enabled':True,'appAction':{'type':'show-cheat-sheet'}},
+            {'id':'swipe-right','enabled':True,'shortcut':{'key':'C','modifiers':['command']}},
+        ])
+        self.gesture('left')
+        self.now = 1
+        self.gesture('right')
+        self.now = 2
+        self.gesture('left')
+        self.assertEqual(self.sent, [
+            {'appAction':{'type':'show-cheat-sheet'}},
+            {'key':'C','modifiers':['command']},
+            {'appAction':{'type':'show-cheat-sheet'}},
+        ])
+        self.assertFalse(self.engine.picker_open)
+
     def test_mac_codes(self):
         self.assertEqual(KEY_CODES['C'],8)
         self.assertEqual(KEY_CODES['Q'],12)
@@ -86,6 +103,220 @@ class ShortcutTests(unittest.TestCase):
         self.assertEqual([s['key'] for s in self.sent],['C'])
     def combo(self, steps, interval=500):
         self.engine.configure([{'id':'combo-test','enabled':True,'steps':steps,'intervalMs':interval,'shortcut':{'key':'R','modifiers':[]}}])
+    def mapped_combo(self, extra=None):
+        mappings = [{'id':m,'enabled':True,'shortcut':{'key':k,'modifiers':[]}}
+                    for m,k in [('tap-index','C'),('tap-middle','V'),('swipe-left','L')]]
+        mappings.append({'id':'combo-test','enabled':True,'shortcut':{'key':'R','modifiers':[]},
+                         'steps':[{'gesture':'tap-index'},{'gesture':'tap-middle'}],'intervalMs':500})
+        self.engine.configure(mappings + (extra or []))
+
+    def test_successful_combo_consumes_both_single_taps(self):
+        self.mapped_combo()
+        self.gesture('tap')
+        self.now = .31; self.engine.flush()
+        self.assertEqual(self.sent, [])
+        self.now = .4; self.gesture('tap',finger='middle')
+        self.finish()
+        self.assertEqual([s['key'] for s in self.sent], ['R'])
+        self.now = 2; self.engine.flush()
+        self.assertEqual([s['key'] for s in self.sent], ['R'])
+
+    def test_combo_timeout_releases_single_tap(self):
+        self.mapped_combo()
+        self.gesture('tap')
+        self.now = .7; self.engine.flush()
+        self.assertEqual(self.sent, [])
+        self.now = .81; self.engine.flush()
+        self.assertEqual([s['key'] for s in self.sent], ['C'])
+
+    def test_disabled_combo_does_not_delay_single_tap(self):
+        self.mapped_combo()
+        self.engine.configure([{'id':'tap-index','enabled':True,'shortcut':{'key':'C','modifiers':[]}},
+            {'id':'combo-disabled','enabled':False,'shortcut':None,'intervalMs':500,
+             'steps':[{'gesture':'tap-index'},{'gesture':'tap-middle'}]}])
+        self.gesture('tap'); self.finish()
+        self.assertEqual([s['key'] for s in self.sent], ['C'])
+
+    def test_single_waits_until_all_competing_combos_fail(self):
+        self.mapped_combo([{'id':'combo-other','enabled':True,'shortcut':{'key':'Z','modifiers':[]},
+            'steps':[{'gesture':'tap-index'},{'gesture':'swipe-left'}],'intervalMs':1000}])
+        self.gesture('tap')
+        self.now = .81; self.engine.flush()
+        self.assertEqual(self.sent, [])
+        self.now = 1.31; self.engine.flush()
+        self.assertEqual([s['key'] for s in self.sent], ['C'])
+
+    def test_wrong_input_releases_single_tap(self):
+        self.mapped_combo()
+        self.gesture('tap')
+        self.now = .4; self.gesture('doubletap',finger='middle')
+        self.finish()
+        self.assertEqual([s['key'] for s in self.sent], ['C'])
+
+    def test_longer_combo_consumes_shorter_combo(self):
+        self.mapped_combo([{'id':'combo-long','enabled':True,'shortcut':{'key':'Z','modifiers':[]},
+            'steps':[{'gesture':'tap-index'},{'gesture':'tap-middle'},{'gesture':'swipe-left'}],
+            'intervalMs':500}])
+        self.gesture('tap')
+        self.now = .2; self.gesture('tap',finger='middle'); self.finish()
+        self.assertEqual(self.sent, [])
+        self.now = .6; self.gesture('left'); self.finish()
+        self.assertEqual([s['key'] for s in self.sent], ['Z'])
+
+    def test_longer_combo_timeout_releases_shorter_combo(self):
+        self.mapped_combo([{'id':'combo-long','enabled':True,'shortcut':{'key':'Z','modifiers':[]},
+            'steps':[{'gesture':'tap-index'},{'gesture':'tap-middle'},{'gesture':'swipe-left'}],
+            'intervalMs':500}])
+        self.gesture('tap')
+        self.now = .2; self.gesture('tap',finger='middle'); self.finish()
+        self.assertEqual(self.sent, [])
+        self.now = 1.1; self.engine.flush()
+        self.assertEqual([s['key'] for s in self.sent], ['R'])
+
+    def test_three_taps_require_three_fresh_inputs_after_each_completion(self):
+        progress = []
+        self.engine.on_progress = progress.append
+        self.combo([{'gesture':'tap-index'}] * 3)
+        for index in range(6):
+            self.now = index * .4
+            self.engine.recognize('tap-index')
+            self.finish()
+            self.assertEqual(len(self.sent), (index + 1) // 3)
+            if (index + 1) % 3 == 0:
+                self.assertEqual(progress[-1], [])
+
+    def test_recognized_swipe_publishes_hints_without_a_flush_or_time_advance(self):
+        events = []
+        self.engine.on_input = lambda event: events.append(('input', self.now, event))
+        self.engine.on_progress = lambda candidates: events.append(('progress', self.now, candidates))
+        self.combo([{'gesture':'swipe-left'},{'gesture':'swipe-right'}])
+        events.clear()
+        self.gesture('left')
+        self.assertEqual([kind for kind, _, _ in events], ['input','progress'])
+        self.assertEqual([at for _, at, _ in events], [0,0])
+        self.assertEqual(events[-1][2][0]['matched'], 1)
+        self.assertEqual(events[-1][2][0]['inputIds'], [events[0][2]['id']])
+        self.assertLessEqual(events[-1][2][0]['remainingMs'], 500)
+
+    def test_single_tap_hints_share_the_recognized_input_timestamp(self):
+        events = []
+        self.engine.on_input = lambda event: events.append(('input', self.now, event))
+        self.engine.on_progress = lambda candidates: events.append(('progress', self.now, candidates))
+        self.combo([{'gesture':'tap-index'},{'gesture':'swipe-left'}])
+        events.clear()
+        self.gesture('tap')
+        self.assertEqual(events, [], 'Unresolved taps must not create false single-tap hints')
+        self.now = .3
+        self.engine.flush()
+        self.assertEqual([kind for kind, _, _ in events], ['input','progress'])
+        self.assertEqual([at for _, at, _ in events], [.3,.3])
+        self.assertEqual(events[-1][2][0]['matched'], 1)
+
+    def test_pending_tap_keeps_later_swipe_in_physical_order(self):
+        outcomes = []
+        self.engine.on_outcome = outcomes.append
+        self.combo([{'gesture':'tap-index'},{'gesture':'swipe-left'}])
+        self.gesture('tap')
+        self.now = .1
+        self.gesture('left')
+        self.assertEqual(outcomes, [])
+        self.now = .3
+        self.engine.flush()
+        self.assertEqual([event['status'] for event in outcomes], ['success'])
+        self.assertEqual(len(self.sent), 1)
+
+    def test_double_tap_publishes_hints_immediately_without_single_tap_attempt(self):
+        progress = []
+        self.engine.on_progress = progress.append
+        self.combo([{'gesture':'double-tap-index'},{'gesture':'swipe-left'}])
+        self.gesture('tap')
+        self.now = .15
+        self.gesture('doubletap','doubleTap')
+        self.assertEqual(progress[-1][0]['matched'], 1)
+        self.assertEqual(self.engine.combo_events, [])
+        self.assertEqual(self.engine.pending, {})
+
+    def test_raw_three_taps_reset_recognition_in_live_and_test_modes(self):
+        for mode in ('live', 'suspended', 'unassigned'):
+            with self.subTest(mode=mode):
+                self.now = 0
+                self.sent.clear()
+                outcomes, progress, recognized = [], [], []
+                self.engine.on_outcome = outcomes.append
+                self.engine.on_progress = progress.append
+                self.engine.on_recognized = recognized.append
+                self.engine.configure([{
+                    'id':'combo-triple', 'enabled':mode != 'unassigned',
+                    'steps':[{'gesture':'tap-index'}]*3, 'intervalMs':500,
+                    'shortcut':None if mode == 'unassigned' else {'key':'R','modifiers':[]},
+                }])
+                self.engine.suspended = mode == 'suspended'
+                for index in range(6):
+                    self.now = index * .4
+                    self.gesture('tap', 'singleTap')
+                    self.finish()
+                    completions = [event for event in outcomes if event['status'] == 'success']
+                    self.assertEqual(len(completions), (index + 1) // 3)
+                    self.assertEqual(recognized.count('combo-triple'), (index + 1) // 3)
+                    if (index + 1) % 3 == 0:
+                        self.assertEqual(progress[-1], [], 'Completion clears every overlapping attempt')
+                    if index == 3:
+                        self.assertEqual(len(progress[-1]), 1)
+                        self.assertEqual(progress[-1][0]['matched'], 1)
+                        self.assertEqual(progress[-1][0]['inputIds'], [self.engine.input_sequence])
+                self.assertEqual(len(self.sent), 2 if mode == 'live' else 0)
+
+    def test_completed_combo_cannot_seed_a_different_combo(self):
+        self.engine.configure([
+            {'id':'combo-first','enabled':True,'shortcut':{'key':'R','modifiers':[]},
+             'steps':[{'gesture':'tap-index'},{'gesture':'tap-middle'}],'intervalMs':500},
+            {'id':'combo-second','enabled':True,'shortcut':{'key':'Z','modifiers':[]},
+             'steps':[{'gesture':'tap-middle'},{'gesture':'swipe-left'}],'intervalMs':500},
+        ])
+        for index, gesture in enumerate(['tap-index','tap-middle','swipe-left']):
+            self.now = index * .4
+            self.engine.recognize(gesture)
+            self.finish()
+        self.assertEqual([s['key'] for s in self.sent], ['R'])
+        for index, gesture in enumerate(['tap-middle','swipe-left']):
+            self.now = 1.2 + index * .4
+            self.engine.recognize(gesture)
+            self.finish()
+        self.assertEqual([s['key'] for s in self.sent], ['R','Z'])
+
+    def test_unassigned_preview_does_not_consume_a_live_combo(self):
+        self.engine.configure([
+            {'id':'combo-preview','enabled':False,'shortcut':None,
+             'steps':[{'gesture':'tap-index'},{'gesture':'tap-middle'}],'intervalMs':500},
+            {'id':'combo-live','enabled':True,'shortcut':{'key':'Z','modifiers':[]},
+             'steps':[{'gesture':'tap-middle'},{'gesture':'swipe-left'}],'intervalMs':500},
+        ])
+        for index, gesture in enumerate(['tap-index','tap-middle','swipe-left']):
+            self.now = index * .4
+            self.engine.recognize(gesture)
+            self.finish()
+        self.assertEqual([s['key'] for s in self.sent], ['Z'])
+
+    def test_longer_repeated_combo_consumes_deferred_shorter_and_suffixes(self):
+        self.engine.configure([
+            {'id':'combo-short','enabled':True,'shortcut':{'key':'R','modifiers':[]},
+             'steps':[{'gesture':'tap-index'}]*2,'intervalMs':500},
+            {'id':'combo-long','enabled':True,'shortcut':{'key':'Z','modifiers':[]},
+             'steps':[{'gesture':'tap-index'}]*3,'intervalMs':500},
+        ])
+        for index in range(3):
+            self.now = index * .4
+            self.engine.recognize('tap-index')
+            self.finish()
+        self.assertEqual([s['key'] for s in self.sent], ['Z'])
+        self.now = 1.2
+        self.engine.recognize('tap-index')
+        self.finish()
+        self.assertEqual([s['key'] for s in self.sent], ['Z'])
+        self.now = 2.5
+        self.engine.flush()
+        self.assertEqual([s['key'] for s in self.sent], ['Z'])
+
     def finish(self):
         self.now += .31
         self.engine.flush()
@@ -124,6 +355,8 @@ class ShortcutTests(unittest.TestCase):
                             self.assertEqual(len(self.sent), int(selected in (None, 'any', actual)))
 
     def test_rotation_direction_at_combo_start(self):
+        inputs = []
+        self.engine.on_input = inputs.append
         self.combo([{'gesture':'rotation','axis':'x','direction':'left'}, {'gesture':'swipe-up'}])
         self.engine.recognize('rotation','x',direction='right')
         self.now = .1
@@ -136,6 +369,7 @@ class ShortcutTests(unittest.TestCase):
         self.gesture('up')
         self.finish()
         self.assertEqual(len(self.sent), 1)
+        self.assertEqual([event['direction'] for event in inputs if event['gesture'] == 'rotation'], ['left'])
 
     def test_combo_timeout_and_wrong_axis(self):
         for delay,axis in [(.7,'x'),(.2,'y')]:

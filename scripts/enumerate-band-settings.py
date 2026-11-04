@@ -13,7 +13,7 @@ async def main():
         count=Fields(Fields(reply.bytes(14)).bytes(1)).integer(1)
         print(json.dumps({'count':count}),flush=True)
         if not 0<count<256: raise ValueError('Unexpected settings count')
-        for index in range(count):
+        for index in range(1, count+1):
             reply=Fields(await band._rpc('settings_describe',1,14,field(2,field(1,2)+field(2,index))))
             info=Fields(Fields(reply.bytes(14)).bytes(2))
             row={'index':index,'descriptor':describe(info)}

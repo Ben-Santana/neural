@@ -2,7 +2,7 @@ import {useEffect,useState,type CSSProperties} from 'react';
 import {Check,X} from 'lucide-react';
 import {GestureIcon} from './MotionSettings';
 import {motions,type Assignment,type GestureStep} from './shortcuts';
-type Input={id:number;at?:number;gesture:GestureStep['gesture'];axis?:'x'|'y'|'z';succeeded?:boolean};
+type Input={id:number;at?:number;gesture:GestureStep['gesture'];air?:GestureStep['air'];axis?:'x'|'y'|'z';succeeded?:boolean};
 type Trace={id:string;attemptId:string;inputIds:number[];holding?:boolean;remainingMs?:number|null;status?:'success'|'failure';reason?:string;hue:number;endedAt?:number};
 export function ComboTracker({assignments}:{assignments:Assignment[]}){
  const [inputs,setInputs]=useState<Input[]>([]);
@@ -33,10 +33,10 @@ export function ComboTracker({assignments}:{assignments:Assignment[]}){
     const matches=visible.filter(t=>t.inputIds.includes(input.id));
     const outcome=matches.find(t=>t.status==='success')??[...matches].reverse().find(t=>t.status);
     const status=input.succeeded?'success':outcome?.status;
-    const label=motions.find(m=>m.id===input.gesture)?.name??input.gesture.replaceAll('-',' ');
+    const label=motions.find(m=>m.id===input.gesture)?.name??(input.gesture==='air'?'Air gesture':input.gesture.replaceAll('-',' '));
     return <div className="stream-slot" key={input.id} style={{transform:`translateX(-${(inputs.length-1-index)*48}px)`}} role="listitem" aria-label={label}>
      <div className="stream-arrival"><div className={`stream-input ${matches.length?'considered':''} ${status??''}`} style={{'--attempt-color':`hsl(${(outcome??matches[0])?.hue??285} 82% 79%)`} as CSSProperties} title={`${label}${input.axis?` · ${input.axis.toUpperCase()}`:''}${matches.length?` · ${matches.map(t=>`Combo ${combos.findIndex(a=>a.id===t.id)+1}: ${t.status??'considering'}`).join(', ')}`:''}`}>
-      <GestureIcon gesture={input.gesture}/>{input.axis&&<small>{input.axis}</small>}
+      <GestureIcon gesture={input.gesture} air={input.air}/>{input.axis&&<small>{input.axis}</small>}
       {status&&<span className={`input-outcome ${status}`} key={status} aria-label={status}>{status==='success'?<Check size={10}/>:<X size={10}/>}</span>}
      </div></div>
     </div>;

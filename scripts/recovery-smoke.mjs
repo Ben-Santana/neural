@@ -12,7 +12,8 @@ try{
  await page.goto('http://127.0.0.1:5190');
  await page.waitForFunction(()=>window.commands.some(c=>c.action==='discover'));
  await page.evaluate(()=>{
-  window.emitBand({kind:'devices',request_id:'startup',devices:[{id:'test-band',name:'Test band'}]});
+  const scan=window.commands.find(c=>c.action==='discover');
+  window.emitBand({kind:'devices',request_id:scan.request_id,devices:[{id:'test-band',name:'Test band'}]});
   window.emitBand({kind:'identity_recovery',device_id:'test-band',message:'Sign in with Meta to enroll this Mac again.'});
   window.emitBand({kind:'state',state:'disconnected'});
   window.emitBand({kind:'state',state:'enrolling'});
@@ -31,10 +32,20 @@ try{
  await page.evaluate(()=>window.emitBand({kind:'events',events:[{type:'Orientation',values:[1,0,0,0]}]}));
  const before=await page.evaluate(()=>window.commands.filter(c=>c.action==='enroll').length);
  await page.clock.runFor(31000);
- await page.getByRole('button',{name:'Sign in with Meta again',exact:true}).waitFor();
+ await page.getByRole('button',{name:'Reconnect band',exact:true}).waitFor();
+ assert.equal(await page.getByRole('button',{name:'Sign in with Meta again',exact:true}).count(),0);
  assert.equal(await page.evaluate(()=>window.commands.filter(c=>c.action==='enroll').length),before,'Gesture silence must not automatically enroll');
+ await page.getByRole('button',{name:'Reconnect band',exact:true}).click();
+ assert.deepEqual(await page.evaluate(()=>window.commands.at(-1)),{action:'connect',device_id:'test-band'});
+ assert.equal(await page.evaluate(()=>window.commands.filter(c=>c.action==='enroll').length),before);
+ await page.evaluate(()=>window.emitBand({kind:'state',state:'connected'}));
  await page.evaluate(()=>window.emitBand({kind:'events',events:[{type:'Gesture',finger:'index',action:'tap'}]}));
  await page.clock.runFor(200);
  assert.equal(await page.getByText('No gestures received yet.',{exact:false}).count(),0);
+ await page.evaluate(()=>window.emitBand({kind:'state',state:'connected'}));
+ await page.clock.runFor(31000);
+ await page.evaluate(()=>window.emitBand({kind:'state',state:'disconnected'}));
+ await page.getByRole('button',{name:'Device settings',exact:true}).click();
+ await page.getByRole('button',{name:'Sign in with Meta again',exact:true}).waitFor();
  console.log('Recovery UI passed: automatic dialog, cancellation, explicit re-enrollment, connected dismissal.');
 }finally{await browser.close();}
