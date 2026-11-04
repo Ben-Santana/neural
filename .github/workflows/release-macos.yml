@@ -1,0 +1,83 @@
+name: Release macOS app
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-macos
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-14
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: astral-sh/setup-uv@v6
+      - name: Install dependencies
+        run: |
+          test "$(uname -m)" = arm64
+          npm ci
+          uv python install 3.12
+          uv venv --python 3.12 --managed-python .venv
+          uv pip install --python .venv/bin/python -r python/requirements.txt
+          npx playwright-core install chrome
+      - name: Test
+        run: |
+          npm run test:python
+          npm run test:air:math
+      - name: Build DMG
+        run: npm run package:mac
+      - name: Verify packaged app and checksum
+        run: |
+          codesign --verify --deep --strict release/dmg/Neural.app
+          PYTHONHOME="$PWD/release/dmg/Neural.app/Contents/Resources/runtime" \
+            release/dmg/Neural.app/Contents/Resources/runtime/bin/python3.12 \
+            -c 'import meta_neural_py; import ssl; print("Bundled Python ready")'
+          hdiutil verify release/Neural-*-arm64.dmg
+          cd release
+          shasum -a 256 Neural-*-arm64.dmg > SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Neural-macOS-arm64-${{ github.run_number }}
+          path: |
+            release/*.dmg
+            release/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          VERSION=$(node -p "JSON.parse(require('fs').readFileSync('package.json','utf8')).version")
+          TAG="v${VERSION}-build.${GITHUB_RUN_NUMBER}"
+          cat > release/notes.md <<'NOTES'
+          Download the arm64 DMG below, open it, and drag Neural into Applications.
+
+          Requires an Apple Silicon Mac and macOS 13 or later. Python is included.
+          This early build is ad-hoc signed, not notarized. If macOS blocks it,
+          use System Settings → Privacy & Security → Open Anyway.
+          Enable Bluetooth for band access and Accessibility for native shortcuts.
+
+          Experimental features and firmware compatibility limits are documented in the README.
+          NOTES
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" release/*.dmg release/SHA256SUMS.txt --clobber
+          else
+            gh release create "$TAG" release/*.dmg release/SHA256SUMS.txt \
+              --target "$GITHUB_SHA" --title "Neural ${VERSION} · build ${GITHUB_RUN_NUMBER}" \
+              --notes-file release/notes.md --latest
+          fi

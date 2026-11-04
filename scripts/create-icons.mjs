@@ -5,6 +5,7 @@ import {Hand} from 'lucide-react';
 import {mkdirSync,writeFileSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 const hand=renderToStaticMarkup(createElement(Hand,{size:24,strokeWidth:1.5}));
+mkdirSync('build',{recursive:true});
 writeFileSync('public/hand.svg',hand);
 const browser=await chromium.launch({channel:'chrome',headless:true});
 try {

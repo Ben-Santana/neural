@@ -27,7 +27,7 @@ info.update(CFBundleExecutable='Neural',CFBundleName='Neural',CFBundleDisplayNam
 info_path.write_bytes(plistlib.dumps(info))
 subprocess.run(['codesign','--force','--deep','--sign','-',str(app)],check=True)
 (stage/'Applications').symlink_to('/Applications')
-(stage/'Install.txt').write_text('Drag Neural to Applications. Open Neural from Applications.\nThis local build is ad-hoc signed, not notarized. If macOS blocks it, use System Settings > Privacy & Security > Open Anyway.\nAllow Bluetooth for band access and Accessibility for motion shortcuts when requested.\nRequires an Apple Silicon Mac and macOS 12 or later. Python is included.\n')
+(stage/'Install.txt').write_text('Drag Neural to Applications. Open Neural from Applications.\nThis local build is ad-hoc signed, not notarized. If macOS blocks it, use System Settings > Privacy & Security > Open Anyway.\nAllow Bluetooth for band access and Accessibility for motion shortcuts when requested.\nRequires an Apple Silicon Mac and macOS 13 or later. Python is included.\n')
 dmg=release/f"Neural-{package['version']}-arm64.dmg"
 subprocess.run(['hdiutil','create','-volname','Neural','-srcfolder',str(stage),'-ov','-format','UDZO',str(dmg)],check=True)
 print(dmg)
